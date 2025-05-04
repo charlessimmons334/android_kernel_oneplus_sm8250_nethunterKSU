@@ -1,6 +1,6 @@
 {
   "name": "ChatGPTKSU KPM",
-  "description": "Init.d and spoofing via KernelSU",
-  "version": "1.0",
+  "description": "Init.d, spoofing, and ko loader",
+  "version": "2.0",
   "author": "Krucial"
 }

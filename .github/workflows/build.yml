@@ -1,0 +1,56 @@
+name: Kernel Build (ChatGPTKSU)
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout kernel source
+      uses: actions/checkout@v3
+    - name: Cache Proton Clang
+      uses: actions/cache@v3
+      with:
+        path: clang-llvm
+        key: ${{ runner.os }}-proton-clang-v1
+    - name: Set up build environment
+      run: |
+        sudo apt update
+        sudo apt install -y git wget curl zip unzip bc bison flex build-essential libncurses5-dev libssl-dev
+    - name: Clone Proton Clang (if not cached)
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang-llvm
+    - name: Make build script executable
+      run: chmod +x kramel-build.sh
+    - name: Build the kernel
+      run: bash kramel-build.sh
+    - name: Verify KernelSU integration
+      run: |
+        echo "Checking for KernelSU signature in Image.gz-dtb..."
+        if strings out/arch/arm64/boot/Image.gz-dtb | grep -qi ksu; then
+          echo "[+] KernelSU detected."
+        else
+          echo "[-] KernelSU NOT found. Please verify integration." && exit 1
+        fi
+    - name: Upload flashable zip
+      uses: actions/upload-artifact@v3
+      with:
+        name: ChatGPTKSU-Zip
+        path: AnyKernel3/*.zip
+    - name: Upload dtbo.img (if built)
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: ChatGPTKSU-dtbo
+        path: AnyKernel3/dtbo.img
+    - name: Upload kernel modules zip (if modules built)
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: ChatGPTKSU-Modules
+        path: Mod/*.zip
+    - name: Upload error log (if build fails)
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: Build-Failure-Log
+        path: error.log

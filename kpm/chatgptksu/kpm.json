@@ -1,0 +1,6 @@
+{
+  "name": "ChatGPTKSU KPM",
+  "description": "Init.d and spoofing via KernelSU",
+  "version": "1.0",
+  "author": "Krucial"
+}

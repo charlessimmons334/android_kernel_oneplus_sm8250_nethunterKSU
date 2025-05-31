@@ -1,4 +1,4 @@
-name: OnePlus 8 Pro Kernel Build with KernelSU Next + SUSFS
+name: Build KernelSU-Next SUSFS
 
 on:
   push:
@@ -8,49 +8,46 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      KBUILD_BUILD_USER: charlessimmons334
+      ARCH: arm64
+      SUBARCH: arm64
+      DEFCONFIG: neternels_defconfig
+
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout kernel source
         uses: actions/checkout@v3
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          sudo apt update && sudo apt install -y bc bison flex libssl-dev libelf-dev build-essential curl git python-is-python3
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cpio curl flex gcc git libncurses-dev libssl-dev lz4 openssl python3 unzip xz-utils zip zstd
 
-      - name: Set Environment
-        run: |
-          echo "KBUILD_BUILD_USER=charlessimmons334" >> $GITHUB_ENV
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
-
-      - name: Clone Toolchain (Proton Clang)
+      - name: Clone Proton Clang toolchain
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
           echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
 
-      - name: Clone Dependencies
+      - name: Clone Patch Repositories
         run: |
           git clone https://github.com/JackA1ltman/NonGKI_Kernel_Patches.git -b op_kernel --depth=1
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 --depth=1
           git clone https://github.com/watercatlxh/anomaly_kernel_with_ksun_susfs.git --depth=1
-          git clone https://github.com/KernelSU/KernelSU-Next.git --depth=1
 
-      - name: Apply KernelSU + SUSFS Patches
+      - name: Apply SUSFS and KernelSU Patches
         run: |
-          cd ${{ github.workspace }}
-          [[ -f NonGKI_Kernel_Patches/ksu_patch.diff ]] && patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch missing or already applied"
-          [[ -f NonGKI_Kernel_Patches/susfs_patch.diff ]] && patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch missing or already applied"
-          cp -vr susfs4ksu/kernel_patches/fs/* fs/ || true
-          cp -vr susfs4ksu/kernel_patches/include/linux/* include/linux/ || true
-          bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || echo "normal_patches.sh failed or not present"
+          cp susfs4ksu/kernel_patches/fs/* fs/ || true
+          cp susfs4ksu/kernel_patches/include/linux/* include/linux/ || true
+          bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || true
+          patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch already applied or failed"
+          patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch already applied or failed"
 
-      - name: Integrate KernelSU-Next
+      - name: Integrate KernelSU-Next with SUSFS
         run: |
-          cd ${{ github.workspace }}
-          cp -r KernelSU-Next/kernel/* ./kernel/
-          echo "obj-y += ksu/" >> kernel/Makefile
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -s next-susfs
 
-      - name: Set Defconfig Flags
+      - name: Set Kernel Configs
         run: |
           CONFIGS=(
             CONFIG_KSU
@@ -72,23 +69,30 @@ jobs:
             CONFIG_KSU_COMPAT_PATCH
           )
           for cfg in "${CONFIGS[@]}"; do
-            echo "$cfg=y" >> arch/arm64/configs/neternels_defconfig
+            echo "$cfg=y" >> arch/arm64/configs/$DEFCONFIG
           done
-          echo "# CONFIG_KSU_SUSFS_SUS_OVERLAYFS is not set" >> arch/arm64/configs/neternels_defconfig
+          echo "# CONFIG_KSU_SUSFS_SUS_OVERLAYFS is not set" >> arch/arm64/configs/$DEFCONFIG
 
       - name: Build Kernel
         run: |
           export PATH=$TOOLCHAIN/bin:$PATH
-          make O=out ARCH=$ARCH SUBARCH=$SUBARCH $DEFCONFIG
+          make O=out ARCH=arm64 SUBARCH=arm64 $DEFCONFIG
           make -j$(nproc) O=out \
-            ARCH=$ARCH \
+            ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CC=clang LLVM=1 LLVM_IAS=1 \
             AR=llvm-ar LD=ld.lld OBJDUMP=llvm-objdump STRIP=llvm-strip
 
+      - name: Clone AnyKernel3 and package flashable zip
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          cp out/arch/arm64/boot/Image AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../KernelSU-Next-SUSFS-${{ github.sha }}.zip *
+
       - name: Upload Flashable ZIP
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: OP8Pro_11_4.19_Kernel
-          path: out/arch/arm64/boot/Image
+          name: KernelSU-Next-SUSFS-ZIP
+          path: KernelSU-Next-SUSFS-*.zip

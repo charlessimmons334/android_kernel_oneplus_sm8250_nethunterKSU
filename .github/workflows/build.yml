@@ -1,4 +1,4 @@
-name: Build OnePlus 8 Pro Kernel with KernelSU Next + SUSFS
+name: OnePlus 8 Pro Kernel Build with KernelSU Next + SUSFS
 
 on:
   push:
@@ -6,37 +6,86 @@ on:
       - KSU-NextSUSFS
 
 jobs:
-  build:
+  build-kernel:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
 
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v3
+
+      - name: Clean Up Runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/powershell
+          sudo apt-get purge -y '^dotnet' 'php.*' '^mysql.*' google-cloud-sdk azure-cli || true
+          sudo apt-get autoremove -y && sudo apt-get autoclean -y
+          df -h
 
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison build-essential cpio curl flex git libncurses5-dev libssl-dev libelf-dev python3 unzip wget xz-utils zip
+          sudo apt install -y bc bison build-essential cpio curl flex git libncurses5-dev \
+              libssl-dev libelf-dev python3 unzip wget xz-utils zip
 
-      - name: Clone Toolchains (Proton Clang) and Modules
+      - name: Clone Toolchain and Dependencies
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          git clone --depth=1 https://github.com/neternels/neternels-modules.git Mod
           git clone --depth=1 --no-single-branch https://github.com/NetErnels/AnyKernel3.git -b op8
+          git clone --depth=1 -b op_kernel https://github.com/JackA1ltman/NonGKI_Kernel_Patches.git NonGKI_Kernel_Patches
+          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git clone https://github.com/watercatlxh/anomaly_kernel_with_ksun_susfs.git
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
 
-      - name: Export Environment
+      - name: Setup Environment
         run: |
-          echo "KBUILD_BUILD_USER=cyberknight777" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=charlessimmons334" >> $GITHUB_ENV
           echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
-          echo "FILES=Image.gz-dtb" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
           echo "PATH=$(pwd)/clang-llvm/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Integrate KernelSU-Next
+        run: |
+          cp -r KernelSU-Next/kernel/* .
+          echo "obj-y += ksu/" >> kernel/Makefile
+
+      - name: Apply KernelSU + SUSFS Patches
+        run: |
+          patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch already applied or failed"
+          patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch already applied or failed"
+          cp susfs4ksu/kernel_patches/fs/* fs/
+          cp susfs4ksu/kernel_patches/include/linux/* include/linux/
+          bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || true
+
+      - name: Enable KernelSU-Next + SUSFS in defconfig
+        run: |
+          CONFIGS=(
+            CONFIG_KSU
+            CONFIG_KSU_SUSFS
+            CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+            CONFIG_KSU_SUSFS_SUS_PATH
+            CONFIG_KSU_SUSFS_SUS_MOUNT
+            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+            CONFIG_KSU_SUSFS_SUS_KSTAT
+            CONFIG_KSU_SUSFS_TRY_UMOUNT
+            CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+            CONFIG_KSU_SUSFS_SPOOF_UNAME
+            CONFIG_KSU_SUSFS_ENABLE_LOG
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT
+            CONFIG_KSU_KPROBES_HOOK
+            CONFIG_KSU_COMPAT_PATCH
+          )
+          for cfg in "${CONFIGS[@]}"; do
+            echo "$cfg=y" >> arch/arm64/configs/neternels_defconfig
+          done
+          echo "# CONFIG_KSU_SUSFS_SUS_OVERLAYFS is not set" >> arch/arm64/configs/neternels_defconfig
 
       - name: Build Kernel
         run: |
-          export PATH=$(pwd)/clang-llvm/bin:$PATH
+          export PATH=$TOOLCHAIN/bin:$PATH
           make O=out ARCH=arm64 SUBARCH=arm64 $DEFCONFIG
           make -j$(nproc) O=out \
             ARCH=arm64 \
@@ -45,15 +94,14 @@ jobs:
             CC=clang LLVM=1 LLVM_IAS=1 \
             AR=llvm-ar LD=ld.lld OBJDUMP=llvm-objdump STRIP=llvm-strip
 
-      - name: Copy Image to AnyKernel3 and Zip
+      - name: Package with AnyKernel3
         run: |
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cd AnyKernel3
-          zip -r NetErnels-unified_op8.zip . -x ".git*" -x "README.md" -x "*.zip"
+          zip -r ../OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip . -x .git* README.md *.zip
 
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v3
         with:
-          name: NetErnels-unified_op8.zip
-          path: AnyKernel3/NetErnels-unified_op8.zip
-
+          name: OP8Pro_11_4.19_Kernel
+          path: OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip

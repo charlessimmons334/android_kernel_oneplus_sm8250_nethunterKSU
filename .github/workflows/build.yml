@@ -1,0 +1,59 @@
+name: Build OnePlus 8 Pro Kernel with KernelSU Next + SUSFS
+
+on:
+  push:
+    branches:
+      - KSU-NextSUSFS
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential cpio curl flex git libncurses5-dev libssl-dev libelf-dev python3 unzip wget xz-utils zip
+
+      - name: Clone Toolchains (Proton Clang) and Modules
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+          git clone --depth=1 https://github.com/neternels/neternels-modules.git Mod
+          git clone --depth=1 --no-single-branch https://github.com/NetErnels/AnyKernel3.git -b op8
+
+      - name: Export Environment
+        run: |
+          echo "KBUILD_BUILD_USER=cyberknight777" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
+          echo "FILES=Image.gz-dtb" >> $GITHUB_ENV
+          echo "PATH=$(pwd)/clang-llvm/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build Kernel
+        run: |
+          export PATH=$(pwd)/clang-llvm/bin:$PATH
+          make O=out ARCH=arm64 SUBARCH=arm64 $DEFCONFIG
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CC=clang LLVM=1 LLVM_IAS=1 \
+            AR=llvm-ar LD=ld.lld OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+      - name: Copy Image to AnyKernel3 and Zip
+        run: |
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          zip -r NetErnels-unified_op8.zip . -x ".git*" -x "README.md" -x "*.zip"
+
+      - name: Upload Flashable ZIP
+        uses: actions/upload-artifact@v3
+        with:
+          name: NetErnels-unified_op8.zip
+          path: AnyKernel3/NetErnels-unified_op8.zip
+

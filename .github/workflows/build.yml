@@ -6,58 +6,52 @@ on:
       - KSU-NextSUSFS
 
 jobs:
-  build-kernel:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Source
+      - name: Checkout Kernel Source
         uses: actions/checkout@v3
-
-      - name: Clean Up Runner
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/powershell
-          sudo apt-get purge -y '^dotnet' 'php.*' '^mysql.*' google-cloud-sdk azure-cli || true
-          sudo apt-get autoremove -y && sudo apt-get autoclean -y
-          df -h
 
       - name: Install Dependencies
         run: |
-          sudo apt update
-          sudo apt install -y bc bison build-essential cpio curl flex git libncurses5-dev \
-              libssl-dev libelf-dev python3 unzip wget xz-utils zip
+          sudo apt update && sudo apt install -y bc bison flex libssl-dev libelf-dev build-essential curl git python-is-python3
 
-      - name: Clone Toolchain and Dependencies
+      - name: Set Environment
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          git clone --depth=1 --no-single-branch https://github.com/NetErnels/AnyKernel3.git -b op8
-          git clone --depth=1 -b op_kernel https://github.com/JackA1ltman/NonGKI_Kernel_Patches.git NonGKI_Kernel_Patches
-          git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          git clone https://github.com/watercatlxh/anomaly_kernel_with_ksun_susfs.git
-          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
-
-      - name: Setup Environment
-        run: |
+          echo "KBUILD_BUILD_USER=charlessimmons334" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "KBUILD_BUILD_USER=charlessimmons334" >> $GITHUB_ENV
           echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
-          echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
-          echo "PATH=$(pwd)/clang-llvm/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Integrate KernelSU-Next
+      - name: Download Toolchain
         run: |
-          cp -r KernelSU-Next/kernel/* .
-          echo "obj-y += ksu/" >> kernel/Makefile
+          curl -LO https://github.com/charlessimmons334/toolchains/releases/download/llvm-release/clang-llvm.tar.gz
+          tar -xf clang-llvm.tar.gz
+          echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
+
+      - name: Clone Dependencies
+        run: |
+          git clone https://github.com/JackA1ltman/NonGKI_Kernel_Patches.git -b op_kernel --depth=1
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 --depth=1
+          git clone https://github.com/watercatlxh/anomaly_kernel_with_ksun_susfs.git --depth=1
+          git clone https://github.com/KernelSU/KernelSU-Next.git --depth=1
 
       - name: Apply KernelSU + SUSFS Patches
         run: |
-          patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch already applied or failed"
-          patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch already applied or failed"
-          cp susfs4ksu/kernel_patches/fs/* fs/
-          cp susfs4ksu/kernel_patches/include/linux/* include/linux/
-          bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || true
+          cd ${{ github.workspace }}
+          [[ -f NonGKI_Kernel_Patches/ksu_patch.diff ]] && patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch missing or already applied"
+          [[ -f NonGKI_Kernel_Patches/susfs_patch.diff ]] && patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch missing or already applied"
+          cp -vr susfs4ksu/kernel_patches/fs/* fs/ || true
+          cp -vr susfs4ksu/kernel_patches/include/linux/* include/linux/ || true
+          bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || echo "normal_patches.sh failed or not present"
 
-      - name: Enable KernelSU-Next + SUSFS in defconfig
+      - name: Integrate KernelSU-Next
+        run: |
+          cd ${{ github.workspace }}
+          cp -r KernelSU-Next/kernel/* ./kernel/
+          echo "obj-y += ksu/" >> kernel/Makefile
+
+      - name: Set Defconfig Flags
         run: |
           CONFIGS=(
             CONFIG_KSU
@@ -86,22 +80,16 @@ jobs:
       - name: Build Kernel
         run: |
           export PATH=$TOOLCHAIN/bin:$PATH
-          make O=out ARCH=arm64 SUBARCH=arm64 $DEFCONFIG
+          make O=out ARCH=$ARCH SUBARCH=$SUBARCH $DEFCONFIG
           make -j$(nproc) O=out \
-            ARCH=arm64 \
+            ARCH=$ARCH \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CC=clang LLVM=1 LLVM_IAS=1 \
             AR=llvm-ar LD=ld.lld OBJDUMP=llvm-objdump STRIP=llvm-strip
 
-      - name: Package with AnyKernel3
-        run: |
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          cd AnyKernel3
-          zip -r ../OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip . -x .git* README.md *.zip
-
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
         with:
           name: OP8Pro_11_4.19_Kernel
-          path: OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip
+          path: out/arch/arm64/boot/Image

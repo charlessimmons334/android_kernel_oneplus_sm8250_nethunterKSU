@@ -92,7 +92,7 @@ jobs:
           zip -r9 ../KernelSU-Next-SUSFS-${{ github.sha }}.zip *
 
       - name: Upload Flashable ZIP
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: KernelSU-Next-SUSFS-ZIP
           path: KernelSU-Next-SUSFS-*.zip

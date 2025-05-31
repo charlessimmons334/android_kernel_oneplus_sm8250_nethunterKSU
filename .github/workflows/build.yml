@@ -103,5 +103,5 @@ jobs:
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
         with:
-        name: OP8Pro_11_4.19_Kernel
-        path: OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip
+          name: OP8Pro_11_4.19_Kernel
+          path: OP8Pro_11_4.19_KernelSU-Next_SUSFS.zip

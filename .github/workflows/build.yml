@@ -23,10 +23,9 @@ jobs:
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
 
-      - name: Download Toolchain
+      - name: Clone Toolchain (Proton Clang)
         run: |
-          curl -LO https://github.com/charlessimmons334/toolchains/releases/download/llvm-release/clang-llvm.tar.gz
-          tar -xf clang-llvm.tar.gz
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
           echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
 
       - name: Clone Dependencies

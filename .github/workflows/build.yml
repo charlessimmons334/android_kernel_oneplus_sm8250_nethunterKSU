@@ -1,65 +1,149 @@
-name: KernelSU-Next SUSFS Build
+name: Kernel Build (ChatGPTKSU)
 
 on:
-  push:
-    branches:
-      - KSU-NextSUSFS
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - android-kernel
+
+    timeout-minutes: 120
+
+    env:
+      ANDROID_BUILD_ROOT: /opt/android
+      CCACHE_DIR: /opt/android/ccache
+      CCACHE_MAXSIZE: 80G
+      USE_CCACHE: "1"
+      PROTON_CLANG: /opt/android/toolchains/proton-clang
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout kernel source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
-    - name: Set up Proton Clang toolchain
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-        echo "TOOLCHAIN=$(pwd)/clang-llvm" >> $GITHUB_ENV
+      - name: Show builder information
+        run: |
+          echo "Runner: $RUNNER_NAME"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "CPU threads: $(nproc)"
+          free -h
+          df -h /
+          ccache -s
 
-    - name: Set environment and build config
-      run: |
-        export PATH=$TOOLCHAIN/bin:$PATH
-        echo "PATH=$TOOLCHAIN/bin:$PATH" >> $GITHUB_ENV
-        echo "DEFCONFIG=neternels_defconfig" >> $GITHUB_ENV
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "KBUILD_BUILD_USER=charlessimmons334" >> $GITHUB_ENV
+      - name: Prepare persistent directories
+        run: |
+          mkdir -p \
+            "$ANDROID_BUILD_ROOT/toolchains" \
+            "$ANDROID_BUILD_ROOT/ccache" \
+            "$ANDROID_BUILD_ROOT/artifacts"
 
-    - name: Clone patch sources
-      run: |
-        git clone https://github.com/JackA1ltman/NonGKI_Kernel_Patches.git -b op_kernel --depth=1
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 --depth=1
-        git clone https://github.com/watercatlxh/anomaly_kernel_with_ksun_susfs.git --depth=1
+      - name: Install Proton Clang if needed
+        run: |
+          if [ ! -x "$PROTON_CLANG/bin/clang" ]; then
+            echo "Installing Proton Clang..."
+            rm -rf "$PROTON_CLANG"
 
-    - name: Apply patches
-      run: |
-        patch -p1 < NonGKI_Kernel_Patches/ksu_patch.diff || echo "ksu_patch already applied or failed"
-        patch -p1 < NonGKI_Kernel_Patches/susfs_patch.diff || echo "susfs_patch already applied or failed"
-        cp susfs4ksu/kernel_patches/fs/* fs/ || true
-        cp susfs4ksu/kernel_patches/include/linux/* include/linux/ || true
-        bash anomaly_kernel_with_ksun_susfs/Patches/normal_patches.sh || true
+            git clone \
+              --depth=1 \
+              https://github.com/kdrag0n/proton-clang \
+              "$PROTON_CLANG"
+          else
+            echo "Using persistent Proton Clang:"
+            "$PROTON_CLANG/bin/clang" --version | head -1
+          fi
 
-    - name: Add KernelSU-Next via setup script
-      run: |
-        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -s next-susfs
+      - name: Configure ccache
+        run: |
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache -z
 
-    - name: Apply KSU config options
-      run: |
-        CONFIGS=(
-          CONFIG_KSU
-          CONFIG_KSU_SUSFS
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
-          CONFIG_KSU_SUSFS_SUS_PATH
-          CONFIG_KSU_SUSFS_SUS_MOUNT
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-          CONFIG_KSU_SUSFS_SUS_KSTAT
-          CONFIG_KSU_SUSFS_TRY_UMOUNT
-          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
-          CONFIG_KSU_SUSFS_SPOOF_UNAME
-          CONFIG_KSU_SUSFS_ENABLE_LOG
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "$PROTON_CLANG/bin" >> "$GITHUB_PATH"
+
+      - name: Verify build environment
+        run: |
+          echo "Clang:"
+          clang --version | head -1
+
+          echo
+          echo "LLD:"
+          ld.lld --version | head -1
+
+          echo
+          echo "ccache:"
+          ccache --version | head -1
+
+          echo
+          echo "Disk:"
+          df -h /
+
+      - name: Make build script executable
+        run: chmod +x kramel-build.sh
+
+      - name: Build kernel
+        run: |
+          set -o pipefail
+          bash kramel-build.sh 2>&1 | tee error.log
+
+      - name: Show ccache results
+        if: always()
+        run: ccache -s
+
+      - name: Verify KernelSU integration
+        run: |
+          IMAGE="out/arch/arm64/boot/Image.gz-dtb"
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "ERROR: $IMAGE was not produced."
+            exit 1
+          fi
+
+          echo "Checking KernelSU signature in $IMAGE..."
+
+          if strings "$IMAGE" | grep -qi ksu; then
+            echo "[+] KernelSU detected."
+          else
+            echo "[-] KernelSU NOT found."
+            exit 1
+          fi
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-Zip
+          path: AnyKernel3/*.zip
+          if-no-files-found: error
+
+      - name: Upload dtbo.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-dtbo
+          path: AnyKernel3/dtbo.img
+          if-no-files-found: ignore
+
+      - name: Upload kernel modules
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-Modules
+          path: Mod/*.zip
+          if-no-files-found: ignore
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Failure-Log
+          path: error.log
+          if-no-files-found: ignore          CONFIG_KSU_SUSFS_ENABLE_LOG
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
           CONFIG_KSU_SUSFS_OPEN_REDIRECT

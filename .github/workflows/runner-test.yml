@@ -1,0 +1,56 @@
+name: Self-Hosted Runner Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - android-kernel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: System information
+        run: |
+          echo "=== HOST ==="
+          hostname
+
+          echo
+          echo "=== CPU ==="
+          nproc
+          lscpu | grep -E 'CPU\(s\)|Socket|Core|Thread|NUMA'
+
+          echo
+          echo "=== MEMORY ==="
+          free -h
+
+          echo
+          echo "=== DISK ==="
+          df -h /
+
+          echo
+          echo "=== BUILD TOOLS ==="
+          git --version
+          clang --version | head -1
+          ld.lld --version | head -1
+          aarch64-linux-gnu-gcc --version | head -1
+          make --version | head -1
+          python3 --version
+          ccache --version | head -1
+
+          echo
+          echo "=== ANDROID WORKSPACE ==="
+          ls -ld /opt/android
+          touch /opt/android/github-actions-write-test
+          rm /opt/android/github-actions-write-test
+          echo "/opt/android write test: OK"
+
+      - name: Ccache information
+        run: |
+          export CCACHE_DIR=/opt/android/ccache
+          ccache -s

@@ -1,56 +1,146 @@
-name: Self-Hosted Runner Test
+name: Kernel Build (ChatGPTKSU)
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  build:
     runs-on:
       - self-hosted
       - Linux
       - X64
       - android-kernel
 
+    timeout-minutes: 120
+
+    env:
+      ANDROID_BUILD_ROOT: /opt/android
+      CCACHE_DIR: /opt/android/ccache
+      CCACHE_MAXSIZE: 80G
+      USE_CCACHE: "1"
+      PROTON_CLANG: /opt/android/toolchains/proton-clang
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout kernel source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
-      - name: System information
+      - name: Show builder information
         run: |
-          echo "=== HOST ==="
-          hostname
-
-          echo
-          echo "=== CPU ==="
-          nproc
-          lscpu | grep -E 'CPU\(s\)|Socket|Core|Thread|NUMA'
-
-          echo
-          echo "=== MEMORY ==="
+          echo "Runner: $RUNNER_NAME"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "CPU threads: $(nproc)"
           free -h
-
-          echo
-          echo "=== DISK ==="
           df -h /
+          ccache -s
+
+      - name: Prepare persistent directories
+        run: |
+          mkdir -p \
+            "$ANDROID_BUILD_ROOT/toolchains" \
+            "$ANDROID_BUILD_ROOT/ccache" \
+            "$ANDROID_BUILD_ROOT/artifacts"
+
+      - name: Install Proton Clang if needed
+        run: |
+          if [ ! -x "$PROTON_CLANG/bin/clang" ]; then
+            echo "Installing Proton Clang..."
+            rm -rf "$PROTON_CLANG"
+
+            git clone \
+              --depth=1 \
+              https://github.com/kdrag0n/proton-clang \
+              "$PROTON_CLANG"
+          else
+            echo "Using persistent Proton Clang:"
+            "$PROTON_CLANG/bin/clang" --version | head -1
+          fi
+
+      - name: Configure ccache
+        run: |
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache -z
+
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "$PROTON_CLANG/bin" >> "$GITHUB_PATH"
+
+      - name: Verify build environment
+        run: |
+          echo "Clang:"
+          clang --version | head -1
 
           echo
-          echo "=== BUILD TOOLS ==="
-          git --version
-          clang --version | head -1
+          echo "LLD:"
           ld.lld --version | head -1
-          aarch64-linux-gnu-gcc --version | head -1
-          make --version | head -1
-          python3 --version
+
+          echo
+          echo "ccache:"
           ccache --version | head -1
 
           echo
-          echo "=== ANDROID WORKSPACE ==="
-          ls -ld /opt/android
-          touch /opt/android/github-actions-write-test
-          rm /opt/android/github-actions-write-test
-          echo "/opt/android write test: OK"
+          echo "Disk:"
+          df -h /
 
-      - name: Ccache information
+      - name: Make build script executable
+        run: chmod +x kramel-build.sh
+
+      - name: Build kernel
         run: |
-          export CCACHE_DIR=/opt/android/ccache
-          ccache -s
+          set -o pipefail
+          bash kramel-build.sh 2>&1 | tee error.log
+
+      - name: Show ccache results
+        if: always()
+        run: ccache -s
+
+      - name: Verify KernelSU integration
+        run: |
+          IMAGE="out/arch/arm64/boot/Image.gz-dtb"
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "ERROR: $IMAGE was not produced."
+            exit 1
+          fi
+
+          echo "Checking KernelSU signature in $IMAGE..."
+
+          if strings "$IMAGE" | grep -qi ksu; then
+            echo "[+] KernelSU detected."
+          else
+            echo "[-] KernelSU NOT found."
+            exit 1
+          fi
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-Zip
+          path: AnyKernel3/*.zip
+          if-no-files-found: error
+
+      - name: Upload dtbo.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-dtbo
+          path: AnyKernel3/dtbo.img
+          if-no-files-found: ignore
+
+      - name: Upload kernel modules
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPTKSU-Modules
+          path: Mod/*.zip
+          if-no-files-found: ignore
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Failure-Log
+          path: error.log
+          if-no-files-found: ignore
